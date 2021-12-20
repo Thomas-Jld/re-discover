@@ -26,6 +26,7 @@ from model import Navigator
 model = Navigator()
 controls = ["forward", "backward", "left", "right"]
 mode = "manual"
+stream_physiological = False
 
 wsclients = []
 types = {}
@@ -36,7 +37,8 @@ def stream_data():
     if "gui" not in types:
         return -1
     while True:
-        types["gui"].sendMessage(json.dumps({"physiological": [60, 2000, 3000]}))
+        if stream_physiological:
+            types["gui"].sendMessage(json.dumps({"physiological": [60, 2000, 3000]}))
         time.sleep(2)
 
 def evaluate():
@@ -61,6 +63,14 @@ class Messenger(WebSocket):
         if self.data is None:
             self.data = ''
         # print(self.address, 'received:', self.data)
+
+        if self.data[0] != "{":
+            try:
+                audio_id = int(self.data)
+                if "gui" in types:
+                    types["gui"].sendMessage(json.dumps({"audio_id": audio_id}))
+            except Exception as e:
+                pass
 
         try:
             data = json.loads(self.data)
