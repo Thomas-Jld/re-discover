@@ -13,6 +13,9 @@
 #include <websocketpp/config/asio_no_tls_client.hpp>
 #include <websocketpp/client.hpp>
 
+#include <websocketpp/common/thread.hpp>
+#include <websocketpp/common/memory.hpp>
+
 typedef websocketpp::client<websocketpp::config::asio_client> client;
 
 using websocketpp::lib::bind;
@@ -22,6 +25,107 @@ using websocketpp::lib::placeholders::_2;
 typedef websocketpp::config::asio_client::message_type::ptr message_ptr;
 
 typedef nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adaptor<float, PointCloud<float>>, PointCloud<float>, 2 /* dim */> my_kd_tree_t;
+
+typedef websocketpp::client<websocketpp::config::asio_client> client;
+
+class connection_metadata
+{
+public:
+    typedef websocketpp::lib::shared_ptr<connection_metadata> ptr;
+
+    connection_metadata(int id, websocketpp::connection_hdl hdl, std::string uri)
+        : m_id(id), m_hdl(hdl), m_status("Connecting"), m_uri(uri), m_server("N/A")
+    {
+    }
+
+    void on_open(client *c, websocketpp::connection_hdl hdl)
+    {
+        m_status = "Open";
+
+        client::connection_ptr con = c->get_con_from_hdl(hdl);
+        m_server = con->get_response_header("Server");
+    }
+
+    void on_fail(client *c, websocketpp::connection_hdl hdl)
+    {
+        m_status = "Failed";
+
+        client::connection_ptr con = c->get_con_from_hdl(hdl);
+        m_server = con->get_response_header("Server");
+        m_error_reason = con->get_ec().message();
+    }
+
+    void on_close(client *c, websocketpp::connection_hdl hdl)
+    {
+        m_status = "Closed";
+        client::connection_ptr con = c->get_con_from_hdl(hdl);
+        std::stringstream s;
+        s << "close code: " << con->get_remote_close_code() << " ("
+          << websocketpp::close::status::get_string(con->get_remote_close_code())
+          << "), close reason: " << con->get_remote_close_reason();
+        m_error_reason = s.str();
+    }
+
+    void on_message(websocketpp::connection_hdl, client::message_ptr msg)
+    {
+        if (msg->get_opcode() == websocketpp::frame::opcode::text)
+        {
+            m_messages.push_back("<< " + msg->get_payload());
+        }
+        else
+        {
+            m_messages.push_back("<< " + websocketpp::utility::to_hex(msg->get_payload()));
+        }
+    }
+
+    websocketpp::connection_hdl get_hdl() const
+    {
+        return m_hdl;
+    }
+
+    int get_id() const
+    {
+        return m_id;
+    }
+
+    std::string get_status() const
+    {
+        return m_status;
+    }
+
+    void record_sent_message(std::string message)
+    {
+        m_messages.push_back(">> " + message);
+    }
+
+    friend std::ostream &operator<<(std::ostream &out, connection_metadata const &data);
+
+private:
+    int m_id;
+    websocketpp::connection_hdl m_hdl;
+    std::string m_status;
+    std::string m_uri;
+    std::string m_server;
+    std::string m_error_reason;
+    std::vector<std::string> m_messages;
+};
+
+std::ostream &operator<<(std::ostream &out, connection_metadata const &data)
+{
+    out << "> URI: " << data.m_uri << "\n"
+        << "> Status: " << data.m_status << "\n"
+        << "> Remote Server: " << (data.m_server.empty() ? "None Specified" : data.m_server) << "\n"
+        << "> Error/close reason: " << (data.m_error_reason.empty() ? "N/A" : data.m_error_reason) << "\n";
+    out << "> Messages Processed: (" << data.m_messages.size() << ") \n";
+
+    std::vector<std::string>::const_iterator it;
+    for (it = data.m_messages.begin(); it != data.m_messages.end(); ++it)
+    {
+        out << *it << "\n";
+    }
+
+    return out;
+}
 
 void on_message(client *c, FMOD_VECTOR *pos, websocketpp::connection_hdl hdl, message_ptr msg)
 {
@@ -36,6 +140,151 @@ void on_message(client *c, FMOD_VECTOR *pos, websocketpp::connection_hdl hdl, me
     (*pos).x = atof(number1.c_str());
     (*pos).y = atof(number2.c_str());
 }
+
+class websocket_endpoint
+{
+public:
+    websocket_endpoint() : m_next_id(0)
+    {
+        m_endpoint.clear_access_channels(websocketpp::log::alevel::all);
+        m_endpoint.clear_error_channels(websocketpp::log::elevel::all);
+
+        m_endpoint.init_asio();
+        m_endpoint.start_perpetual();
+
+        m_thread = websocketpp::lib::make_shared<websocketpp::lib::thread>(&client::run, &m_endpoint);
+    }
+
+    ~websocket_endpoint()
+    {
+        m_endpoint.stop_perpetual();
+
+        for (con_list::const_iterator it = m_connection_list.begin(); it != m_connection_list.end(); ++it)
+        {
+            if (it->second->get_status() != "Open")
+            {
+                // Only close open connections
+                continue;
+            }
+
+            std::cout << "> Closing connection " << it->second->get_id() << std::endl;
+
+            websocketpp::lib::error_code ec;
+            m_endpoint.close(it->second->get_hdl(), websocketpp::close::status::going_away, "", ec);
+            if (ec)
+            {
+                std::cout << "> Error closing connection " << it->second->get_id() << ": "
+                          << ec.message() << std::endl;
+            }
+        }
+
+        m_thread->join();
+    }
+
+    int connect(std::string const &uri, FMOD_VECTOR *pos)
+    {
+        websocketpp::lib::error_code ec;
+
+        client::connection_ptr con = m_endpoint.get_connection(uri, ec);
+
+        if (ec)
+        {
+            std::cout << "> Connect initialization error: " << ec.message() << std::endl;
+            return -1;
+        }
+
+        int new_id = m_next_id++;
+        connection_metadata::ptr metadata_ptr = websocketpp::lib::make_shared<connection_metadata>(new_id, con->get_handle(), uri);
+        m_connection_list[new_id] = metadata_ptr;
+
+        con->set_open_handler(bind(
+            &connection_metadata::on_open,
+            metadata_ptr,
+            &m_endpoint,
+            ::_1));
+        con->set_fail_handler(bind(
+            &connection_metadata::on_fail,
+            metadata_ptr,
+            &m_endpoint,
+            ::_1));
+        con->set_close_handler(bind(
+            &connection_metadata::on_close,
+            metadata_ptr,
+            &m_endpoint,
+            ::_1));
+        con->set_message_handler(bind(
+            *on_message,
+            &m_endpoint,
+            pos,
+            ::_1,
+            ::_2));
+
+        m_endpoint.connect(con);
+
+        return new_id;
+    }
+
+    void close(int id, websocketpp::close::status::value code, std::string reason)
+    {
+        websocketpp::lib::error_code ec;
+
+        con_list::iterator metadata_it = m_connection_list.find(id);
+        if (metadata_it == m_connection_list.end())
+        {
+            std::cout << "> No connection found with id " << id << std::endl;
+            return;
+        }
+
+        m_endpoint.close(metadata_it->second->get_hdl(), code, reason, ec);
+        if (ec)
+        {
+            std::cout << "> Error initiating close: " << ec.message() << std::endl;
+        }
+    }
+
+    void send(int id, std::string message)
+    {
+        websocketpp::lib::error_code ec;
+
+        con_list::iterator metadata_it = m_connection_list.find(id);
+        if (metadata_it == m_connection_list.end())
+        {
+            std::cout << "> No connection found with id " << id << std::endl;
+            return;
+        }
+
+        m_endpoint.send(metadata_it->second->get_hdl(), message, websocketpp::frame::opcode::text, ec);
+        if (ec)
+        {
+            std::cout << "> Error sending message: " << ec.message() << std::endl;
+            return;
+        }
+
+        metadata_it->second->record_sent_message(message);
+    }
+
+    connection_metadata::ptr get_metadata(int id) const
+    {
+        con_list::const_iterator metadata_it = m_connection_list.find(id);
+        if (metadata_it == m_connection_list.end())
+        {
+            return connection_metadata::ptr();
+        }
+        else
+        {
+            return metadata_it->second;
+        }
+    }
+
+private:
+    typedef std::map<int, connection_metadata::ptr> con_list;
+
+    client m_endpoint;
+    websocketpp::lib::shared_ptr<websocketpp::lib::thread> m_thread;
+
+    con_list m_connection_list;
+    int m_next_id;
+};
 
 std::vector<int> kdtree_demo(my_kd_tree_t *index, const float query[2], const float search_radius)
 {
@@ -126,7 +375,9 @@ int load_sound(
     std::vector<uint> *playing_queue, // array of status for streams; -1 for
                                       // not initialized, else id in kdtree
     FMOD::Sound **s,                  // array of Sound objects
-    FMOD::System *system              // pointer to FMOD::System object
+    FMOD::System *system,             // pointer to FMOD::System object
+    websocket_endpoint *endpoint,
+    int id
 )
 {
     const char *name;
@@ -156,9 +407,9 @@ int load_sound(
             }
 
             // std::cout << "load sound at " << j << std::endl;
-
             (*playing_queue)[j] = *res;
 
+            endpoint->send(id, (*arr)[*res].id);
             name = (*arr)[*res].path.data();
             std::cout << "loading " << name << std::endl;
             // Sound loading for audio info retrieval
@@ -352,9 +603,13 @@ bool getNextLineAndSplitIntoTokens(
         {
             x = std::stof(cell) * scale;
         }
-        else // is y coordinate
+        else if (i == 2) // is y coordinate
         {
             y = std::stof(cell) * scale;
+        }
+        else // is i
+        {
+            d.id = cell;
         }
         i++;
     }
@@ -374,9 +629,17 @@ bool getNextLineAndSplitIntoTokens(
     return false;
 }
 
-int playsound(FMOD_VECTOR *pos)
+
+int main(int argc, char *argv[])
 {
-    // Inits
+    websocket_endpoint endpoint;
+    std::string uri = "ws://localhost:9002";
+
+
+    FMOD_VECTOR pos = {1250, -1250, 0}; // Starting point
+
+    int id = endpoint.connect(uri, &pos);
+
     FMOD_RESULT result;
     FMOD::System *system = NULL;
     PointCloud<float> cloud;
@@ -440,61 +703,24 @@ int playsound(FMOD_VECTOR *pos)
     {
         result = system->set3DListenerAttributes(
             listener,
-            pos,
+            &pos,
             nullptr,
             nullptr,
             nullptr);
 
-        const float query[2] = {(*pos).x, (*pos).y};
+        const float query[2] = {pos.x, pos.y};
         const float query_radius = 50;
         std::vector<int> kd_result;
 
         kd_result = kdtree_demo(&index, query, query_radius);
-        std::cout << "kdtree done" << std::endl;
+        // std::cout << "kdtree done" << std::endl;
         clean_channels(channel, 5000, buffer_size, chunk_step_ms, offset, &playing_queue);
-        std::cout << "clean done" << std::endl;
-        load_sound(&arr, 5000, channel, chunk_step_ms, exinfo, &kd_result, offset, &playing_queue, s, system);
-        std::cout << "load done" << std::endl;
-        std::cout << "Position: " << (*pos).x << " " << (*pos).y << std::endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+        // std::cout << "clean done" << std::endl;
+        load_sound(&arr, 5000, channel, chunk_step_ms, exinfo, &kd_result, offset, &playing_queue, s, system, &endpoint, id);
+        // std::cout << "load done" << std::endl;
+        std::cout << "Position: " << pos.x << " " << pos.y << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1666));
     }
 
     return 0;
-}
-
-int main(int argc, char *argv[])
-{
-    client c;
-    std::string uri = "ws://localhost:9002";
-
-    if (argc == 2)
-    {
-        uri = argv[1];
-    }
-
-    try
-    {
-        FMOD_VECTOR pos = {1250, -1250, 0}; // Starting point
-        std::thread t1(playsound, &pos);
-
-        c.set_access_channels(websocketpp::log::alevel::all);
-        c.clear_access_channels(websocketpp::log::alevel::frame_payload);
-        c.init_asio();
-        c.set_message_handler(bind(&on_message, &c, &pos, ::_1, ::_2));
-
-        websocketpp::lib::error_code ec;
-        client::connection_ptr con = c.get_connection(uri, ec);
-        if (ec)
-        {
-            std::cout << "could not create connection because: " << ec.message() << std::endl;
-            return 0;
-        }
-
-        c.connect(con);
-        c.run();
-    }
-    catch (websocketpp::exception const &e)
-    {
-        std::cout << e.what() << std::endl;
-    }
 }

@@ -19,6 +19,7 @@ struct data
     std::vector<float> embedding; // coordinate of audio chunk (currently 2D)
     std::string path; // path to file
     int chunk; // chunk number in file
+	std::string id; // id of audio
 };
 
 
