@@ -17,13 +17,13 @@
 import json
 import threading
 import time
-from SimpleWebSocketServer import WebSocket, SimpleWebSocketServer
 
-import torch
+from SimpleWebSocketServer import SimpleWebSocketServer, WebSocket
 
-from model import Navigator
+# import torch
+# from model import Navigator
 
-model = Navigator()
+# model = Navigator()
 controls = ["forward", "backward", "left", "right"]
 mode = "manual"
 stream_physiological = False
@@ -44,7 +44,7 @@ def stream_data():
 def evaluate():
     while True:
         if mode == "automatic":
-            actions = model(torch.tensor(position))
+            actions = [1, 0, 0, 0] # model(torch.tensor(position))
             choices = [1 if action > 0 else 0 for action in actions]
             message = {"movement": {}}
             for i, choice in enumerate(choices):
