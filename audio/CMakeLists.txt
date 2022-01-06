@@ -4,9 +4,9 @@ project(MAIN)
 
 
 # add the executable
-add_executable(TEST ${VENDORS_HEADERS} main.cpp)
+add_executable(AUDIO ${VENDORS_HEADERS} main.cpp)
 
-target_link_libraries(TEST pthread )
+target_link_libraries(AUDIO pthread )
 message(STATUS ${Boost_INCLUDE_DIRS} )
 
 
@@ -25,7 +25,7 @@ include_directories(
 )
 
 target_link_libraries(
-    TEST
+    AUDIO
     ${CMAKE_SOURCE_DIR}/vendors/fmod/lib/x86_64/libfmod.so
     ${CMAKE_SOURCE_DIR}/vendors/fmod/lib/x86_64/libfmodL.so
 
