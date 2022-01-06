@@ -394,8 +394,8 @@ int load_sound(
             std::find(
                 playing_queue->begin(),
                 playing_queue->end(),
-                *res) == playing_queue->end() &&
-            (rand() % 100 < 5 || res == kd_result->end())) // true if absent
+                *res) == playing_queue->end()
+            && (rand() % 100 < 5 || res == kd_result->end())) // true if absent
         //play and add to playing
         {
             //get empty sound
@@ -719,7 +719,7 @@ int main(int argc, char *argv[])
         load_sound(&arr, 5000, channel, chunk_step_ms, exinfo, &kd_result, offset, &playing_queue, s, system, &endpoint, id);
         // std::cout << "load done" << std::endl;
         std::cout << "Position: " << pos.x << " " << pos.y << std::endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1666));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 
     return 0;
