@@ -16,17 +16,14 @@
 #include <websocketpp/common/thread.hpp>
 #include <websocketpp/common/memory.hpp>
 
-typedef websocketpp::client<websocketpp::config::asio_client> client;
-
 using websocketpp::lib::bind;
 using websocketpp::lib::placeholders::_1;
 using websocketpp::lib::placeholders::_2;
-
 typedef websocketpp::config::asio_client::message_type::ptr message_ptr;
+typedef websocketpp::client<websocketpp::config::asio_client> client;
 
 typedef nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adaptor<float, PointCloud<float>>, PointCloud<float>, 2 /* dim */> my_kd_tree_t;
 
-typedef websocketpp::client<websocketpp::config::asio_client> client;
 
 class connection_metadata
 {
@@ -110,6 +107,7 @@ private:
     std::vector<std::string> m_messages;
 };
 
+
 std::ostream &operator<<(std::ostream &out, connection_metadata const &data)
 {
     out << "> URI: " << data.m_uri << "\n"
@@ -127,6 +125,7 @@ std::ostream &operator<<(std::ostream &out, connection_metadata const &data)
     return out;
 }
 
+
 void on_message(client *c, FMOD_VECTOR *pos, websocketpp::connection_hdl hdl, message_ptr msg)
 {
     // msg is "number1,number2"
@@ -140,6 +139,7 @@ void on_message(client *c, FMOD_VECTOR *pos, websocketpp::connection_hdl hdl, me
     (*pos).x = atof(number1.c_str());
     (*pos).y = atof(number2.c_str());
 }
+
 
 class websocket_endpoint
 {
@@ -286,6 +286,7 @@ private:
     int m_next_id;
 };
 
+
 std::vector<int> kdtree_demo(my_kd_tree_t *index, const float query[2], const float search_radius)
 {
 
@@ -312,6 +313,7 @@ std::vector<int> kdtree_demo(my_kd_tree_t *index, const float query[2], const fl
     }
 }
 
+
 FMOD_RESULT F_CALLBACK pcmreadcallback(FMOD_SOUND * /*sound*/, void *data, unsigned int datalen)
 {
     static float t1 = 0, t2 = 0; // time
@@ -331,6 +333,7 @@ FMOD_RESULT F_CALLBACK pcmreadcallback(FMOD_SOUND * /*sound*/, void *data, unsig
 
     return FMOD_OK;
 }
+
 
 int clean_channels(
     FMOD::Channel **channel,
@@ -364,6 +367,7 @@ int clean_channels(
     return 0;
 }
 
+
 int load_sound(
     std::vector<data> *arr,           // array of data struct
     int audio_length_ms,              // lengths of audio to play in ms
@@ -377,8 +381,7 @@ int load_sound(
     FMOD::Sound **s,                  // array of Sound objects
     FMOD::System *system,             // pointer to FMOD::System object
     websocket_endpoint *endpoint,
-    int id
-)
+    int id)
 {
     const char *name;
     FMOD_RESULT result;
@@ -394,8 +397,8 @@ int load_sound(
             std::find(
                 playing_queue->begin(),
                 playing_queue->end(),
-                *res) == playing_queue->end()
-            && (rand() % 100 < 5 || res == kd_result->end())) // true if absent
+                *res) == playing_queue->end() &&
+            (rand() % 100 < 5 || res == kd_result->end())) // true if absent
         //play and add to playing
         {
             //get empty sound
@@ -549,6 +552,7 @@ int load_sound(
     return 0;
 }
 
+
 bool getNextLineAndSplitIntoTokens(
     std::ifstream &str,
     float scale,
@@ -634,7 +638,6 @@ int main(int argc, char *argv[])
 {
     websocket_endpoint endpoint;
     std::string uri = "ws://localhost:9002";
-
 
     FMOD_VECTOR pos = {1250, -1250, 0}; // Starting point
 
